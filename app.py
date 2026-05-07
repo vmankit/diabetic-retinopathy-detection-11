@@ -35,10 +35,25 @@ st.markdown("""
         border: 1px solid #ffeeba;
         color: #856404;
     }
+    .mild-npdr {
+        background-color: #e2f0fb;
+        border: 1px solid #b8d7f0;
+        color: #0c5460;
+    }
+    .moderate-npdr {
+        background-color: #fce8d5;
+        border: 1px solid #f6c08b;
+        color: #8a4b08;
+    }
     .severe {
         background-color: #f8d7da;
         border: 1px solid #f5c6cb;
         color: #721c24;
+    }
+    .proliferative-dr {
+        background-color: #e6d4f5;
+        border: 1px solid #c7a5e6;
+        color: #4b2a63;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -54,11 +69,19 @@ st.markdown("""
 st.markdown("---")
 
 # Class labels
-CLASS_NAMES = ['No DR', 'Non-Proliferative DR', 'Severe/Proliferative DR']
+CLASS_NAMES = [
+    'No DR',
+    'Mild NPDR',
+    'Moderate NPDR',
+    'Severe NPDR',
+    'Proliferative DR'
+]
 CLASS_DESCRIPTIONS = {
     'No DR': 'No signs of diabetic retinopathy detected. Regular screening recommended.',
-    'Non-Proliferative DR': 'Early stage of diabetic retinopathy detected. Consult an ophthalmologist for follow-up.',
-    'Severe/Proliferative DR': 'Advanced stage of diabetic retinopathy detected. Immediate medical attention recommended.'
+    'Mild NPDR': 'Very early diabetic retinopathy changes are present. Follow up with an ophthalmologist.',
+    'Moderate NPDR': 'Moderate diabetic retinopathy changes are present. Clinical follow-up is recommended.',
+    'Severe NPDR': 'Severe non-proliferative diabetic retinopathy is present. Prompt specialist review is recommended.',
+    'Proliferative DR': 'Advanced proliferative diabetic retinopathy is present. Immediate medical attention is recommended.'
 }
 
 # Image preprocessing
@@ -68,26 +91,47 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
+
+class DRModel(nn.Module):
+    def __init__(self):
+        super(DRModel, self).__init__()
+
+        base_model = models.resnet50(weights=None)
+
+        self.backbone = nn.Sequential(*list(base_model.children())[:-1])
+
+        self.classifier = nn.Sequential(
+            nn.Linear(2048, 512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, 5)
+        )
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
+        return x
+
 @st.cache_resource
 def load_model():
-    """Load the trained ResNet-50 model"""
+    """Load the trained DRModel checkpoint"""
     try:
-        # Load ResNet-50 with ImageNet pretrained weights
-        model = models.resnet50(weights=None)
-        
-        # Modify the final layer for 3 classes
-        num_ftrs = model.fc.in_features
-        model.fc = nn.Linear(num_ftrs, 3)
-        
-        # Load the trained weights
+        model = DRModel()
+
         model_path = 'best_model (2).pth'
         state_dict = torch.load(model_path, map_location=torch.device('cpu'))
-        
-        # Handle different state dict formats
-        if 'model_state_dict' in state_dict:
-            model.load_state_dict(state_dict['model_state_dict'])
-        else:
-            model.load_state_dict(state_dict)
+
+        if isinstance(state_dict, dict):
+            if 'model_state_dict' in state_dict:
+                state_dict = state_dict['model_state_dict']
+            elif 'state_dict' in state_dict:
+                state_dict = state_dict['state_dict']
+
+        if isinstance(state_dict, dict) and any(key.startswith('module.') for key in state_dict):
+            state_dict = {key.replace('module.', '', 1): value for key, value in state_dict.items()}
+
+        model.load_state_dict(state_dict)
         
         model.eval()
         return model
@@ -106,8 +150,9 @@ def predict_image(model, image):
             outputs = model(image_tensor)
             probabilities = torch.nn.functional.softmax(outputs, dim=1)
             confidence, predicted = torch.max(probabilities, 1)
+            predicted_index = int(predicted.item())
         
-        return CLASS_NAMES[predicted.item()], confidence.item(), probabilities[0].tolist()
+        return CLASS_NAMES[predicted_index], confidence.item(), probabilities[0].tolist()
     except Exception as e:
         st.error(f"Error during prediction: {str(e)}")
         return None, 0, [0, 0, 0]
@@ -145,12 +190,14 @@ if uploaded_file is not None:
         st.subheader("Analysis Results")
         
         # Determine CSS class based on prediction
-        if prediction == 'No DR':
-            css_class = 'no-dr'
-        elif prediction == 'Non-Proliferative DR':
-            css_class = 'non-proliferative'
-        else:
-            css_class = 'severe'
+        css_class_map = {
+            'No DR': 'no-dr',
+            'Mild NPDR': 'non-proliferative',
+            'Moderate NPDR': 'moderate-npdr',
+            'Severe NPDR': 'severe',
+            'Proliferative DR': 'proliferative-dr'
+        }
+        css_class = css_class_map.get(prediction, 'severe')
         
         st.markdown(f"""
         <div class="result-box {css_class}">
@@ -183,12 +230,14 @@ st.markdown("---")
 st.markdown("""
 ### About This Application
 
-This application uses a deep learning model (ResNet-50) trained on the APTOS 2019 Blindness Detection dataset 
-to classify retinal fundus images into three categories:
+This application uses a deep learning model based on ResNet-50 trained on the APTOS 2019 Blindness Detection dataset 
+to classify retinal fundus images into five categories:
 
 - **No DR**: No signs of diabetic retinopathy
-- **Non-Proliferative DR**: Early stage diabetic retinopathy
-- **Severe/Proliferative DR**: Advanced stage diabetic retinopathy
+- **Mild NPDR**: Mild non-proliferative diabetic retinopathy
+- **Moderate NPDR**: Moderate non-proliferative diabetic retinopathy
+- **Severe NPDR**: Severe non-proliferative diabetic retinopathy
+- **Proliferative DR**: Proliferative diabetic retinopathy
 
 ⚠️ **Disclaimer**: This tool is for educational and screening purposes only. It should not replace 
 professional medical diagnosis. Always consult an ophthalmologist for accurate diagnosis and treatment.

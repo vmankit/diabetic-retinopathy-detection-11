@@ -3,8 +3,7 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
-import numpy as np
-import io
+from pathlib import Path
 
 # Page configuration
 st.set_page_config(
@@ -71,18 +70,17 @@ st.markdown("---")
 # Class labels
 CLASS_NAMES = [
     'No DR',
-    'Mild NPDR',
-    'Moderate NPDR',
-    'Severe NPDR',
-    'Proliferative DR'
+    'Non-Proliferative DR',
+    'Severe / Proliferative DR'
 ]
 CLASS_DESCRIPTIONS = {
     'No DR': 'No signs of diabetic retinopathy detected. Regular screening recommended.',
-    'Mild NPDR': 'Very early diabetic retinopathy changes are present. Follow up with an ophthalmologist.',
-    'Moderate NPDR': 'Moderate diabetic retinopathy changes are present. Clinical follow-up is recommended.',
-    'Severe NPDR': 'Severe non-proliferative diabetic retinopathy is present. Prompt specialist review is recommended.',
-    'Proliferative DR': 'Advanced proliferative diabetic retinopathy is present. Immediate medical attention is recommended.'
+    'Non-Proliferative DR': 'Early diabetic retinopathy changes are present. Follow up with an ophthalmologist.',
+    'Severe / Proliferative DR': 'Advanced diabetic retinopathy is present. Immediate medical attention is recommended.'
 }
+
+APP_DIR = Path(__file__).resolve().parent
+MODEL_CANDIDATES = [APP_DIR / 'best_model.pth', APP_DIR / 'best_model (2).pth']
 
 # Image preprocessing
 transform = transforms.Compose([
@@ -93,34 +91,50 @@ transform = transforms.Compose([
 
 
 class DRModel(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=3, hidden_dim=512, dropout_rate=0.4):
         super(DRModel, self).__init__()
 
         base_model = models.resnet50(weights=None)
 
-        self.backbone = nn.Sequential(*list(base_model.children())[:-1])
+        self.backbone = nn.Sequential(
+            base_model.conv1,
+            base_model.bn1,
+            base_model.relu,
+            base_model.maxpool,
+            base_model.layer1,
+            base_model.layer2,
+            base_model.layer3,
+            base_model.layer4,
+        )
+        self.avgpool = base_model.avgpool
+        self.layer4 = base_model.layer4
 
         self.classifier = nn.Sequential(
-            nn.Linear(2048, 512),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 5)
+            nn.Linear(2048, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim, num_classes)
         )
 
     def forward(self, x):
         x = self.backbone(x)
+        x = self.avgpool(x)
         x = torch.flatten(x, 1)
-        x = self.classifier(x)
-        return x
+        return self.classifier(x)
 
 @st.cache_resource
 def load_model():
     """Load the trained DRModel checkpoint"""
     try:
-        model = DRModel()
+        model = DRModel(num_classes=3, hidden_dim=512, dropout_rate=0.4)
 
-        model_path = 'best_model (2).pth'
-        state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+        model_path = next((path for path in MODEL_CANDIDATES if path.exists()), None)
+        if model_path is None:
+            raise FileNotFoundError(
+                f"Missing checkpoint. Expected one of: {', '.join(path.name for path in MODEL_CANDIDATES)}"
+            )
+
+        state_dict = torch.load(model_path, map_location='cpu')
 
         if isinstance(state_dict, dict):
             if 'model_state_dict' in state_dict:
@@ -131,7 +145,7 @@ def load_model():
         if isinstance(state_dict, dict) and any(key.startswith('module.') for key in state_dict):
             state_dict = {key.replace('module.', '', 1): value for key, value in state_dict.items()}
 
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=True)
         
         model.eval()
         return model
@@ -161,7 +175,7 @@ def predict_image(model, image):
 model = load_model()
 
 if model is None:
-    st.error("Failed to load the model. Please ensure 'best_model (2).pth' is in the current directory.")
+    st.error("Failed to load the model. Please ensure 'best_model.pth' is in the current directory.")
     st.stop()
 
 # File upload
@@ -192,10 +206,8 @@ if uploaded_file is not None:
         # Determine CSS class based on prediction
         css_class_map = {
             'No DR': 'no-dr',
-            'Mild NPDR': 'non-proliferative',
-            'Moderate NPDR': 'moderate-npdr',
-            'Severe NPDR': 'severe',
-            'Proliferative DR': 'proliferative-dr'
+            'Non-Proliferative DR': 'non-proliferative',
+            'Severe / Proliferative DR': 'severe'
         }
         css_class = css_class_map.get(prediction, 'severe')
         
@@ -231,13 +243,11 @@ st.markdown("""
 ### About This Application
 
 This application uses a deep learning model based on ResNet-50 trained on the APTOS 2019 Blindness Detection dataset 
-to classify retinal fundus images into five categories:
+to classify retinal fundus images into three categories:
 
 - **No DR**: No signs of diabetic retinopathy
-- **Mild NPDR**: Mild non-proliferative diabetic retinopathy
-- **Moderate NPDR**: Moderate non-proliferative diabetic retinopathy
-- **Severe NPDR**: Severe non-proliferative diabetic retinopathy
-- **Proliferative DR**: Proliferative diabetic retinopathy
+- **Non-Proliferative DR**: Early diabetic retinopathy changes
+- **Severe / Proliferative DR**: Advanced diabetic retinopathy changes
 
 ⚠️ **Disclaimer**: This tool is for educational and screening purposes only. It should not replace 
 professional medical diagnosis. Always consult an ophthalmologist for accurate diagnosis and treatment.

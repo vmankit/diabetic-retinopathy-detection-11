@@ -18,6 +18,7 @@ A Streamlit-based web application for automated detection of diabetic retinopath
 - **Architecture**: ResNet-50 (ImageNet V2 pretrained)
 - **Dataset**: APTOS 2019 Blindness Detection
 - **Classes**: 3-class system for diabetic retinopathy severity
+- **Checkpoint**: `best_model.pth`
 
 ## Installation
 
@@ -26,7 +27,7 @@ A Streamlit-based web application for automated detection of diabetic retinopath
 pip install -r requirements.txt
 ```
 
-2. Ensure the model file `best_model (2).pth` is in the project directory.
+2. Ensure the model file `best_model.pth` is in the project directory.
 
 ## Running the Application
 
@@ -51,8 +52,7 @@ The application will open in your default web browser at `http://localhost:8501`
 
 ## Requirements
 
-- Python 3.8+
-- PyTorch 2.0+
-- Streamlit 1.28+
+- Python 3.11
+- PyTorch 2.2+
+- Streamlit 1.33+
 - PIL/Pillow
-- NumPy

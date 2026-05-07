@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
+import cv2
+import numpy as np
 from pathlib import Path
 
 # Page configuration
@@ -83,11 +85,65 @@ APP_DIR = Path(__file__).resolve().parent
 MODEL_CANDIDATES = [APP_DIR / 'best_model.pth', APP_DIR / 'best_model (2).pth']
 
 # Image preprocessing
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
+IMAGE_SIZE = (224, 224)
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+
+def remove_black_borders(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return image
+    largest = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest)
+    if w < 10 or h < 10:
+        return image
+    return image[y:y + h, x:x + w]
+
+
+def resize_image(image, size=IMAGE_SIZE):
+    return cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+
+
+def apply_clahe(image, clip_limit=2.0, tile_grid_size=(8, 8)):
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+    l_ch = clahe.apply(l_ch)
+    lab = cv2.merge([l_ch, a_ch, b_ch])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def ben_graham_filter(image, sigma=10):
+    blurred = cv2.GaussianBlur(image, (0, 0), sigmaX=sigma)
+    return cv2.addWeighted(image, 4, blurred, -4, 128)
+
+
+def preprocess_image(image, size=IMAGE_SIZE):
+    image = remove_black_borders(image)
+    image = resize_image(image, size)
+    image = apply_clahe(image)
+    image = ben_graham_filter(image)
+    return image
+
+
+def image_to_tensor(image):
+    image_array = np.array(image) if isinstance(image, Image.Image) else image
+    if image_array.ndim == 2:
+        image_array = cv2.cvtColor(image_array, cv2.COLOR_GRAY2BGR)
+    elif image_array.shape[2] == 3:
+        image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+
+    processed_bgr = preprocess_image(image_array)
+    processed_rgb = cv2.cvtColor(processed_bgr, cv2.COLOR_BGR2RGB)
+
+    return transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ])(processed_rgb)
 
 
 class DRModel(nn.Module):
@@ -156,8 +212,7 @@ def load_model():
 def predict_image(model, image):
     """Make prediction on the uploaded image"""
     try:
-        # Preprocess the image
-        image_tensor = transform(image).unsqueeze(0)
+        image_tensor = image_to_tensor(image).unsqueeze(0)
         
         # Make prediction
         with torch.no_grad():
